@@ -48,8 +48,11 @@ function double_optin_webhook_forwarder(WP_REST_Request $request)
     $token = sanitize_text_field($request->get_param('token'));
     $expiration = sanitize_text_field($request->get_param('expiration'));
 
+    // Get the date format from settings (default: 'm-d-Y')
+    $date_format = get_option('double_optin_date_format', 'm-d-Y');
+
     // Convert expiration date to timestamp
-    $expiration_date = DateTime::createFromFormat('m-d-Y', $expiration);
+    $expiration_date = DateTime::createFromFormat($date_format, $expiration);
     if (!$expiration_date) {
         double_optin_redirect_to_error_page();
     }
@@ -181,6 +184,7 @@ add_action('admin_init', function () {
     register_setting('double_optin_settings_group', 'double_optin_redirect_page');
     register_setting('double_optin_settings_group', 'double_optin_expired_page');
     register_setting('double_optin_settings_group', 'double_optin_error_page');
+    register_setting('double_optin_settings_group', 'double_optin_date_format');
 
     add_settings_section('double_optin_settings_section', 'Webhook & API Settings', function () {
         echo '<p>Configure the webhook URL, expiration settings, and API settings.</p>';
@@ -192,6 +196,11 @@ add_action('admin_init', function () {
 
     add_settings_field('double_optin_api_prefix', 'REST API Prefix', function () {
         echo '<input type="text" name="double_optin_api_prefix" value="' . esc_attr(get_option('double_optin_api_prefix', 'double-optin')) . '" class="regular-text">';
+    }, 'double-optin-settings', 'double_optin_settings_section');
+    
+    add_settings_field('double_optin_date_format', 'Date Format', function () {
+    echo '<input type="text" name="double_optin_date_format" value="' . esc_attr(get_option('double_optin_date_format', 'm-d-Y')) . '" class="regular-text">';
+    echo '<p class="description">Enter the date format (default: <code>m-d-Y</code>). Based on PHP <code>date()</code> formats or Luxon documentation.</p>';
     }, 'double-optin-settings', 'double_optin_settings_section');
 
     foreach (['redirect_page' => 'Landing Page', 'expired_page' => 'Expired Page', 'error_page' => 'Error Page'] as $option => $label) {
