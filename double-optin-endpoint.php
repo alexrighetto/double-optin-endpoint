@@ -2,8 +2,8 @@
 /**
  * Plugin Name: Double Opt-In Webhook Forwarder
  * Description: Handles double opt-in verification, forwards data to an external webhook, and redirects users.
- * Version: 1.3
- * Author: Alex Righetto
+ * Version: 1.6
+ * Author: Your Name
  */
 
 if (!defined('ABSPATH')) {
@@ -12,7 +12,7 @@ if (!defined('ABSPATH')) {
 
 // Register the REST API endpoint dynamically
 add_action('rest_api_init', function () {
-    $api_prefix = get_option('double_optin_api_prefix', 'double-optin'); // Default: double-optin
+    $api_prefix = get_option('double_optin_api_prefix', 'double-optin');
 
     register_rest_route($api_prefix . '/v1', '/confirm/', array(
         'methods' => 'GET',
@@ -29,6 +29,12 @@ add_action('rest_api_init', function () {
                 'validate_callback' => function ($param) {
                     return !empty($param);
                 }
+            ),
+            'expiration' => array(
+                'required' => true,
+                'validate_callback' => function ($param) {
+                    return DateTime::createFromFormat('m-d-Y', $param) !== false;
+                }
             )
         ),
         'permission_callback' => '__return_true',
@@ -40,26 +46,42 @@ function double_optin_webhook_forwarder(WP_REST_Request $request)
 {
     $email = sanitize_email($request->get_param('email'));
     $token = sanitize_text_field($request->get_param('token'));
+    $expiration = sanitize_text_field($request->get_param('expiration'));
 
-    // Get webhook URL and selected landing page from settings
-    $webhook_url = get_option('double_optin_webhook_url', '');
-    $redirect_page_id = get_option('double_optin_redirect_page', '');
-    
-    if (empty($webhook_url)) {
-        wp_die('Webhook URL is not configured.', 'Error', array('response' => 500));
+    // Convert expiration date to timestamp
+    $expiration_date = DateTime::createFromFormat('m-d-Y', $expiration);
+    if (!$expiration_date) {
+        double_optin_redirect_to_error_page();
     }
 
-    // Get the selected landing page URL
+    $expiration_timestamp = $expiration_date->getTimestamp();
+    $current_timestamp = current_time('timestamp');
+
+    // Get webhook URL and selected landing/expired/error pages from settings
+    $webhook_url = get_option('double_optin_webhook_url', '');
+    $redirect_page_id = get_option('double_optin_redirect_page', '');
+    $expired_page_id = get_option('double_optin_expired_page', '');
+    $error_page_id = get_option('double_optin_error_page', '');
+
+    // Redirect if link is expired
+    if ($current_timestamp > $expiration_timestamp + (48 * 60 * 60)) {
+        double_optin_redirect_to_selected_page($expired_page_id, '/expired');
+    }
+
+    // Redirect if webhook URL is not set
+    if (empty($webhook_url)) {
+        double_optin_redirect_to_error_page();
+    }
+
+    // If everything is valid, send data and redirect to the thank-you page
     if (!empty($redirect_page_id)) {
         $redirect_url = get_permalink($redirect_page_id);
-        
-        // If WPML is active, get the translated URL
         if (function_exists('icl_object_id')) {
             $translated_page_id = icl_object_id($redirect_page_id, 'page', true);
             $redirect_url = get_permalink($translated_page_id);
         }
     } else {
-        $redirect_url = home_url('/thank-you'); // Default fallback
+        $redirect_url = home_url('/thank-you');
     }
 
     // Prepare the payload
@@ -68,16 +90,35 @@ function double_optin_webhook_forwarder(WP_REST_Request $request)
         'token' => $token
     );
 
-    // Send the webhook in the background (Non-blocking request)
+    // Send the webhook in the background
     wp_remote_post($webhook_url, array(
         'method'    => 'POST',
         'body'      => json_encode($body),
         'headers'   => array('Content-Type' => 'application/json'),
-        'timeout'   => 0.01, // Prevents user waiting for webhook response
-        'blocking'  => false, // Run in the background
+        'timeout'   => 0.01,
+        'blocking'  => false,
     ));
 
-    // Redirect the user to the selected landing page
+    wp_redirect($redirect_url);
+    exit;
+}
+
+// Redirect to the selected error page
+function double_optin_redirect_to_error_page() {
+    double_optin_redirect_to_selected_page(get_option('double_optin_error_page', ''), '/error');
+}
+
+// General function to handle redirections
+function double_optin_redirect_to_selected_page($page_id, $default_slug) {
+    if (!empty($page_id)) {
+        $redirect_url = get_permalink($page_id);
+        if (function_exists('icl_object_id')) {
+            $translated_page_id = icl_object_id($page_id, 'page', true);
+            $redirect_url = get_permalink($translated_page_id);
+        }
+    } else {
+        $redirect_url = home_url($default_slug);
+    }
     wp_redirect($redirect_url);
     exit;
 }
@@ -136,53 +177,24 @@ add_action('admin_init', function () {
     register_setting('double_optin_settings_group', 'double_optin_webhook_url');
     register_setting('double_optin_settings_group', 'double_optin_api_prefix');
     register_setting('double_optin_settings_group', 'double_optin_redirect_page');
+    register_setting('double_optin_settings_group', 'double_optin_expired_page');
+    register_setting('double_optin_settings_group', 'double_optin_error_page');
 
-    add_settings_section(
-        'double_optin_settings_section',
-        'Webhook & API Settings',
-        function () {
-            echo '<p>Configure the webhook URL and API settings.</p>';
-        },
-        'double-optin-settings'
-    );
+    add_settings_section('double_optin_settings_section', 'Webhook & API Settings', function () {
+        echo '<p>Configure the webhook URL, expiration settings, and API settings.</p>';
+    }, 'double-optin-settings');
 
-    add_settings_field(
-        'double_optin_webhook_url',
-        'Webhook URL',
-        function () {
-            $webhook_url = get_option('double_optin_webhook_url', '');
-            echo '<input type="text" name="double_optin_webhook_url" value="' . esc_attr($webhook_url) . '" class="regular-text">';
-        },
-        'double-optin-settings',
-        'double_optin_settings_section'
-    );
+    add_settings_field('double_optin_webhook_url', 'Webhook URL', function () {
+        echo '<input type="text" name="double_optin_webhook_url" value="' . esc_attr(get_option('double_optin_webhook_url', '')) . '" class="regular-text">';
+    }, 'double-optin-settings', 'double_optin_settings_section');
 
-    add_settings_field(
-        'double_optin_api_prefix',
-        'REST API Prefix',
-        function () {
-            $api_prefix = get_option('double_optin_api_prefix', 'double-optin');
-            echo '<input type="text" name="double_optin_api_prefix" value="' . esc_attr($api_prefix) . '" class="regular-text">';
-            echo '<p class="description">This defines the API route. Default is <code>double-optin</code>. Change this if needed.</p>';
-        },
-        'double-optin-settings',
-        'double_optin_settings_section'
-    );
+    add_settings_field('double_optin_api_prefix', 'REST API Prefix', function () {
+        echo '<input type="text" name="double_optin_api_prefix" value="' . esc_attr(get_option('double_optin_api_prefix', 'double-optin')) . '" class="regular-text">';
+    }, 'double-optin-settings', 'double_optin_settings_section');
 
-    add_settings_field(
-        'double_optin_redirect_page',
-        'Landing Page',
-        function () {
-            $selected_page = get_option('double_optin_redirect_page', '');
-            wp_dropdown_pages(array(
-                'name'              => 'double_optin_redirect_page',
-                'selected'          => $selected_page,
-                'show_option_none'  => 'Select a page',
-                'option_none_value' => ''
-            ));
-            echo '<p class="description">Choose the page where users will land after confirmation.</p>';
-        },
-        'double-optin-settings',
-        'double_optin_settings_section'
-    );
+    foreach (['redirect_page' => 'Landing Page', 'expired_page' => 'Expired Page', 'error_page' => 'Error Page'] as $option => $label) {
+        add_settings_field('double_optin_' . $option, $label, function () use ($option) {
+            wp_dropdown_pages(['name' => 'double_optin_' . $option, 'selected' => get_option('double_optin_' . $option, ''), 'show_option_none' => 'Select a page', 'option_none_value' => '']);
+        }, 'double-optin-settings', 'double_optin_settings_section');
+    }
 });
