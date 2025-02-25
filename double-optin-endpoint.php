@@ -153,9 +153,11 @@ function double_optin_settings_page()
             <ol>
                 <li>Set up your external webhook URL (n8n or another service).</li>
                 <li>Define the API prefix (default: <code>double-optin</code>).</li>
-                <li>Choose a landing page where users will be redirected after confirmation.</li>
+                <li>Select a <strong>Landing Page</strong> where users will be redirected after successful confirmation.</li>
+                <li>Select an <strong>Expired Page</strong> where users will be redirected if the link is older than **48 hours**.</li>
+                <li>Select an <strong>Error Page</strong> where users will be redirected in case of an **invalid email, token, or expiration date**.</li>
                 <li>Construct the confirmation link in this format:<br>
-                    <code><?php echo esc_url(home_url('/wp-json/' . get_option('double_optin_api_prefix', 'double-optin') . '/v1/confirm/?email=user@example.com&token=123456')); ?></code>
+                    <code><?php echo esc_url(home_url('/wp-json/' . get_option('double_optin_api_prefix', 'double-optin') . '/v1/confirm/?email=user@example.com&token=123456&expiration=02-27-2025')); ?></code>
                 </li>
             </ol>
         </p>
